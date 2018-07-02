@@ -1072,6 +1072,64 @@ void TypeChecker::endVisit(EmitStatement const& _emit)
 	m_insideEmitStatement = false;
 }
 
+/**
+ * Creates a tuple declaration syntax from a vector of variable declarations.
+ *
+ * @param decls a tuple of variables
+ *
+ * @returns a Solidity language confirming string of a tuple variable declaration.
+ */
+static string createTupleDecl(vector<VariableDeclaration const*> const & decls)
+{
+	if (decls.size() == 1)
+	{
+		VariableDeclaration const* var = decls[0];
+		string const typeName = var->annotation().type->toString(true);
+		return typeName + " " + var->name();
+	}
+
+	stringstream sb;
+
+	sb << '(';
+
+	for (size_t i = 0, e = decls.size(); i != e; ++i)
+	{
+		VariableDeclaration const* var = decls[i];
+		if (i > 0)
+			sb << ", ";
+
+		if (var)
+			sb << var->annotation().type->toString(true) << ' ' << var->name();
+	}
+
+	sb << ')';
+
+	return sb.str();
+}
+
+static bool typeCanBeExpressed(vector<VariableDeclaration const*> const & decls)
+{
+	for (size_t i = 0, e = decls.size(); i != e; ++i)
+	{
+		VariableDeclaration const* var = decls[i];
+
+		// skip empty tuples (they can be expressed of course)
+		if (!var)
+			continue;
+
+		if (auto functionType = dynamic_cast<FunctionType const*>(var->annotation().type.get()))
+		{
+			if (
+				functionType->kind() != FunctionType::Kind::Internal &&
+				functionType->kind() != FunctionType::Kind::External
+			)
+				return false;
+		}
+	}
+
+	return true;
+}
+
 bool TypeChecker::visit(VariableDeclarationStatement const& _statement)
 {
 	bool const v050 = m_scope->sourceUnit().annotation().experimentalFeatures.count(ExperimentalFeature::V050);
@@ -1185,6 +1243,8 @@ bool TypeChecker::visit(VariableDeclarationStatement const& _statement)
 		else
 			assignments[assignments.size() - i - 1] = variables[variables.size() - i - 1].get();
 
+	int autoTypeDeductionNeeded = 0;
+
 	for (size_t i = 0; i < assignments.size(); ++i)
 	{
 		if (!assignments[i])
@@ -1195,6 +1255,8 @@ bool TypeChecker::visit(VariableDeclarationStatement const& _statement)
 		solAssert(!!valueComponentType, "");
 		if (!var.annotation().type)
 		{
+			autoTypeDeductionNeeded++;
+
 			// Infer type from value.
 			solAssert(!var.typeName(), "");
 			var.annotation().type = valueComponentType->mobileType();
@@ -1238,14 +1300,6 @@ bool TypeChecker::visit(VariableDeclarationStatement const& _statement)
 				}
 				else
 					solAssert(dynamic_cast<FixedPointType const*>(var.annotation().type.get()), "Unknown type.");
-
-				m_errorReporter.warning(
-					_statement.location(),
-					"The type of this variable was inferred as " +
-					typeName +
-					extension +
-					". This is probably not desired. Use an explicit type to silence this warning."
-				);
 			}
 
 			var.accept(*this);
@@ -1282,6 +1336,28 @@ bool TypeChecker::visit(VariableDeclarationStatement const& _statement)
 			}
 		}
 	}
+
+	if (autoTypeDeductionNeeded != 0)
+	{
+		if (!typeCanBeExpressed(assignments))
+		{
+			// TODO: tell which components were meant.
+			// such as: "Type cannot be expressed in syntax for: a, b, c."
+			m_errorReporter.syntaxError(_statement.location(),
+				"Use of the \"var\" keyword is disallowed. "
+				"Type cannot be expressed in syntax.");
+		}
+		else
+		{
+			// report with trivial snipped `uint i = ...`
+			string const typeName = createTupleDecl(assignments);
+
+			m_errorReporter.syntaxError(_statement.location(),
+				"Use of the \"var\" keyword is disallowed. "
+				"Use explicit declaration `" + typeName + " = ...´ instead.");
+		}
+	}
+
 	return false;
 }
 
