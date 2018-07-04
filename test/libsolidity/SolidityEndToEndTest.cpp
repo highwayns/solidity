@@ -8060,21 +8060,24 @@ BOOST_AUTO_TEST_CASE(create_memory_array_allocation_size)
 	// multiple of 32
 	char const* sourceCode = R"(
 		contract C {
-			function f() pure returns (uint d1, uint d2, uint d3) {
+			function f() pure returns (uint d1, uint d2, uint d3, bool ms) {
 				bytes memory b1 = new bytes(31);
 				bytes memory b2 = new bytes(32);
 				bytes memory b3 = new bytes(256);
 				bytes memory b4 = new bytes(31);
+				uint memsize;
 				assembly {
 					d1 := sub(b2, b1)
 					d2 := sub(b3, b2)
 					d3 := sub(b4, b3)
+					memsize := msize()
 				}
+				ms = memsize <= (480 + 0x80);
 			}
 		}
 	)";
 	compileAndRun(sourceCode);
-	ABI_CHECK(callContractFunction("f()"), encodeArgs(0x40, 0x40, 0x20 + 256));
+	ABI_CHECK(callContractFunction("f()"), encodeArgs(0x40, 0x40, 0x20 + 256, true));
 }
 
 BOOST_AUTO_TEST_CASE(memory_arrays_of_various_sizes)
